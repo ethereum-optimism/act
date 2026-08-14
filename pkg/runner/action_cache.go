@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -31,10 +32,20 @@ type GoGitActionCache struct {
 	Path string
 }
 
+var goGitActionCacheLocks sync.Map
+
+func goGitActionCacheLock(gitPath string) *sync.RWMutex {
+	lock, _ := goGitActionCacheLocks.LoadOrStore(gitPath, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
+}
+
 func (c GoGitActionCache) Fetch(ctx context.Context, cacheDir, url, ref, token string) (string, error) {
 	logger := common.Logger(ctx)
 
 	gitPath := path.Join(c.Path, safeFilename(cacheDir)+".git")
+	cacheLock := goGitActionCacheLock(gitPath)
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 
 	logger.Infof("GoGitActionCache fetch %s with ref %s at %s", url, ref, gitPath)
 
@@ -131,6 +142,14 @@ func (c GoGitActionCache) GetTarArchive(ctx context.Context, cacheDir, sha, incl
 	logger := common.Logger(ctx)
 
 	gitPath := path.Join(c.Path, safeFilename(cacheDir)+".git")
+	cacheLock := goGitActionCacheLock(gitPath)
+	cacheLock.RLock()
+	locked := true
+	defer func() {
+		if locked {
+			cacheLock.RUnlock()
+		}
+	}()
 
 	logger.Infof("GoGitActionCache get content %s with sha %s subpath '%s' at %s", cacheDir, sha, includePrefix, gitPath)
 
@@ -161,6 +180,7 @@ func (c GoGitActionCache) GetTarArchive(ctx context.Context, cacheDir, sha, incl
 		}
 	}()
 	go func() {
+		defer cacheLock.RUnlock()
 		defer wpipe.Close()
 		defer close(ch)
 		tw := tar.NewWriter(wpipe)
@@ -169,6 +189,7 @@ func (c GoGitActionCache) GetTarArchive(ctx context.Context, cacheDir, sha, incl
 			return actionCacheCopyFileOrDir(ctx, cleanIncludePrefix, t, tw, f.Name, f)
 		}))
 	}()
+	locked = false
 	return rpipe, err
 }
 

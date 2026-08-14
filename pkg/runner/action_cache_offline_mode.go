@@ -22,6 +22,9 @@ func (c GoGitActionCacheOfflineMode) Fetch(ctx context.Context, cacheDir, url, r
 	logger.Infof("GoGitActionCacheOfflineMode fetch content %s with ref %s at %s", url, ref, gitPath)
 
 	sha, fetchErr := c.Parent.Fetch(ctx, cacheDir, url, ref, token)
+	cacheLock := goGitActionCacheLock(gitPath)
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	gogitrepo, err := git.PlainOpen(gitPath)
 	if err != nil {
 		return "", fetchErr
